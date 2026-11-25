@@ -1,3 +1,11 @@
+## v2.4.3
+
+1. feat: Update the DeepSeek engine to the new chat completions endpoint.
+2. feat: Add an opt-in thinking switch for the DeepSeek engine.
+3. fix: Migrate the retired DeepSeek model names to the new ones.
+
+---
+
 ## v2.4.2
 
 1. feat: Move cache path from temp to a persistent folder. Credit to @Sansui233.

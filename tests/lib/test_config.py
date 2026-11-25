@@ -3,7 +3,7 @@ from typing import Any
 from unittest.mock import call, Mock
 
 from ...lib.config import (
-    Configuration, get_config, ver200_upgrade, ver203_upgrade)
+    Configuration, get_config, ver200_upgrade, ver203_upgrade, ver243_upgrade)
 
 
 class TestFunction(unittest.TestCase):
@@ -126,6 +126,118 @@ class TestFunction(unittest.TestCase):
         self.assertNotIn('request_timeout', data)
 
         config.commit.assert_called()
+
+    def create_mock_config(self, data):
+        config = Mock()
+        config.get.side_effect = lambda key: data.get(key)
+        config.update.side_effect = lambda **kwargs: data.update(**kwargs)
+        return config
+
+    def test_ver243_upgrade_chat(self):
+        data = {'engine_preferences': {
+            'DeepSeek': {'model': 'deepseek-chat', 'api_keys': ['a']}}}
+
+        ver243_upgrade(self.create_mock_config(data))
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-flash', preference['model'])
+        self.assertFalse(preference['thinking'])
+        self.assertEqual(['a'], preference['api_keys'])
+
+    def test_ver243_upgrade_reasoner(self):
+        data = {'engine_preferences': {
+            'DeepSeek': {'model': 'deepseek-reasoner'}}}
+
+        ver243_upgrade(self.create_mock_config(data))
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-flash', preference['model'])
+        self.assertTrue(preference['thinking'])
+
+    def test_ver243_upgrade_v4_flash(self):
+        data = {'engine_preferences': {
+            'DeepSeek': {'model': 'deepseek-v4-flash'}}}
+
+        config = self.create_mock_config(data)
+        ver243_upgrade(config)
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-flash', preference['model'])
+        self.assertNotIn('thinking', preference)
+        config.commit.assert_called()
+
+    def test_ver243_upgrade_keeps_explicit_thinking(self):
+        data = {'engine_preferences': {
+            'DeepSeek': {'model': 'deepseek-reasoner', 'thinking': False}}}
+
+        ver243_upgrade(self.create_mock_config(data))
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-flash', preference['model'])
+        self.assertFalse(preference['thinking'])
+
+    def test_ver243_upgrade_keeps_custom_model(self):
+        data = {'engine_preferences': {
+            'DeepSeek': {'model': 'my-own-model'}}}
+
+        config = self.create_mock_config(data)
+        ver243_upgrade(config)
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('my-own-model', preference['model'])
+        self.assertNotIn('thinking', preference)
+        config.commit.assert_not_called()
+
+    def test_ver243_upgrade_keeps_custom_endpoint(self):
+        data = {'engine_preferences': {'DeepSeek': {
+            'model': 'deepseek-chat',
+            'endpoint': 'https://example.com/v1/chat/completions'}}}
+
+        config = self.create_mock_config(data)
+        ver243_upgrade(config)
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-chat', preference['model'])
+        self.assertEqual(
+            'https://example.com/v1/chat/completions', preference['endpoint'])
+        self.assertNotIn('thinking', preference)
+        config.commit.assert_not_called()
+
+    def test_ver243_upgrade_updates_official_endpoint(self):
+        data = {'engine_preferences': {'DeepSeek': {
+            'model': 'deepseek-chat',
+            'endpoint': 'https://api.deepseek.com/v1/chat/completions'}}}
+
+        ver243_upgrade(self.create_mock_config(data))
+
+        preference = data['engine_preferences']['DeepSeek']
+        self.assertEqual('deepseek-flash', preference['model'])
+        self.assertEqual(
+            'https://api.deepseek.com/chat/completions',
+            preference['endpoint'])
+
+    def test_ver243_upgrade_without_deepseek(self):
+        data = {'engine_preferences': {'ChatGPT': {'model': 'gpt-4o'}}}
+
+        config = self.create_mock_config(data)
+        ver243_upgrade(config)
+
+        self.assertEqual(
+            {'ChatGPT': {'model': 'gpt-4o'}}, data['engine_preferences'])
+        config.commit.assert_not_called()
+
+        config = self.create_mock_config({'engine_preferences': {}})
+        ver243_upgrade(config)
+        config.commit.assert_not_called()
+
+    def test_ver243_upgrade_with_invalid_preference(self):
+        data = {'engine_preferences': {'DeepSeek': 'invalid'}}
+
+        config = self.create_mock_config(data)
+        ver243_upgrade(config)
+
+        self.assertEqual('invalid', data['engine_preferences']['DeepSeek'])
+        config.commit.assert_not_called()
 
 
 class TestConfig(unittest.TestCase):

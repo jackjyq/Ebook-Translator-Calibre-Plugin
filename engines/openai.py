@@ -156,31 +156,39 @@ class ChatgptTranslate(GenAI):
                     break
                 try:
                     data = json.loads(chunk)
-                    # Handle different streaming response schemas
-                    if 'choices' in data and len(data['choices']) > 0:
-                        choice = data['choices'][0]
-                        # Standard streaming format
-                        if 'delta' in choice and 'content' in choice['delta']:
-                            content = choice['delta']['content']
-                            if content:
-                                yield str(content)
-                        # Alternative streaming format
-                        elif 'content' in choice:
-                            content = choice['content']
-                            if isinstance(content, list) and len(content) > 0:
-                                text = content[0].get('text', '')
-                                if text:
-                                    yield str(text)
-                            elif isinstance(content, str) and content:
-                                yield str(content)
-                        # Direct text format
-                        elif 'text' in choice:
-                            text = choice['text']
-                            if text:
-                                yield str(text)
                 except json.JSONDecodeError:
                     # Skip malformed JSON chunks
                     continue
+                content = self._extract_stream_content(data)
+                if content:
+                    yield content
+
+    def _extract_stream_content(self, data):
+        """Extract the text from a streaming chunk, if there is any."""
+        # Handle different streaming response schemas
+        if not ('choices' in data and len(data['choices']) > 0):
+            return None
+        choice = data['choices'][0]
+        # Standard streaming format
+        if 'delta' in choice and 'content' in choice['delta']:
+            content = choice['delta']['content']
+            if content:
+                return str(content)
+        # Alternative streaming format
+        elif 'content' in choice:
+            content = choice['content']
+            if isinstance(content, list) and len(content) > 0:
+                text = content[0].get('text', '')
+                if text:
+                    return str(text)
+            elif isinstance(content, str) and content:
+                return str(content)
+        # Direct text format
+        elif 'text' in choice:
+            text = choice['text']
+            if text:
+                return str(text)
+        return None
 
 
 class ChatgptBatchTranslate:

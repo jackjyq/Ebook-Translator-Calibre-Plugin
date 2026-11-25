@@ -17,6 +17,7 @@ from ...lib.exception import UnexpectedResult, UnsupportedModel
 from ...engines.genai import GenAI
 from ...engines.deepl import DeeplTranslate
 from ...engines.openai import ChatgptTranslate, ChatgptBatchTranslate
+from ...engines.deepseek import DeepseekTranslate
 from ...engines.microsoft import AzureChatgptTranslate
 from ...engines.anthropic import ClaudeTranslate
 from ...engines.google import GeminiTranslate
@@ -597,6 +598,159 @@ class TestChatgptTranslate(unittest.TestCase):
         result = self.translator.translate('Hello World!')
 
         self.assertEqual('你好世界！', result)
+
+
+class TestDeepseekTranslate(unittest.TestCase):
+    def setUp(self):
+        DeepseekTranslate.set_config({'api_keys': ['a']})
+        DeepseekTranslate.lang_codes = {
+            'source': {'English': 'EN'}, 'target': {'Chinese': 'ZH'}}
+
+        self.translator = DeepseekTranslate()
+        self.translator.set_source_lang('English')
+        self.translator.set_target_lang('Chinese')
+
+        self.prompt = (
+            ChatgptTranslate.prompt
+            .replace('<slang>', 'English').replace('<tlang>', 'Chinese'))
+
+    def test_created_engine(self):
+        self.assertIsInstance(self.translator, ChatgptTranslate)
+        self.assertEqual(
+            'https://api.deepseek.com/chat/completions',
+            self.translator.endpoint)
+        self.assertEqual(
+            ['deepseek-flash', 'deepseek-v4-pro'],
+            self.translator.get_models())
+        self.assertEqual('deepseek-flash', self.translator.model)
+        self.assertFalse(self.translator.thinking)
+
+    def test_created_engine_with_config(self):
+        DeepseekTranslate.set_config({
+            'api_keys': ['a'],
+            'model': 'deepseek-v4-pro',
+            'thinking': True})
+
+        translator = DeepseekTranslate()
+        self.assertEqual('deepseek-v4-pro', translator.model)
+        self.assertTrue(translator.thinking)
+
+    def test_get_body(self):
+        self.assertEqual(
+            {
+                'model': 'deepseek-flash',
+                'messages': [
+                    {'role': 'system', 'content': self.prompt},
+                    {'role': 'user', 'content': 'test content'}],
+                'stream': True,
+                'temperature': 1.3,
+                'thinking': {'type': 'disabled'},
+            },
+            json.loads(self.translator.get_body('test content')))
+
+    def test_get_body_with_thinking(self):
+        self.translator.thinking = True
+        body = json.loads(self.translator.get_body('test content'))
+        self.assertEqual({'type': 'enabled'}, body.get('thinking'))
+
+    def test_get_body_without_stream(self):
+        self.translator.stream = False
+        body = json.loads(self.translator.get_body('test content'))
+        self.assertNotIn('stream', body)
+        self.assertEqual({'type': 'disabled'}, body.get('thinking'))
+
+    @patch(module_name + '.openai.EbookTranslator')
+    @patch(module_name + '.base.request')
+    def test_translate_stream(self, mock_request, mock_et):
+        mock_et.__version__ = '1.0.0'
+        data = json.dumps({
+            'model': 'deepseek-flash',
+            'messages': [
+                {'role': 'system', 'content': self.prompt},
+                {'role': 'user', 'content': 'Hello World!'}],
+            'stream': True,
+            'temperature': 1.3,
+            'thinking': {'type': 'disabled'},
+        })
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer a',
+            'User-Agent': 'Ebook-Translator/1.0.0'}
+        mock_response = Mock()
+        mock_response.readline.side_effect = [
+            'data: {"choices":[{"delta":'
+            '{"reasoning_content":"Let me think"}}]}'.encode(),
+            'data: {"choices":[{"delta":{"content":"\u4f60"}}]}'.encode(),
+            'data: {"choices":[{"delta":{"content":"\u597d"}}]}'.encode(),
+            'data: [DONE]'.encode()]
+        mock_request.return_value = mock_response
+
+        result = self.translator.translate('Hello World!')
+
+        mock_request.assert_called_with(
+            url='https://api.deepseek.com/chat/completions', data=data,
+            headers=headers, method='POST', timeout=60.0, proxy_uri=None,
+            raw_object=True)
+        self.assertIsInstance(result, GeneratorType)
+        self.assertEqual('你好', ''.join(result))
+
+    def test_parse_stream_ignores_reasoning_content(self):
+        response = stream_response([
+            b'data: {"choices":[{"delta":'
+            b'{"reasoning_content":"thinking"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"\xe4\xbd\xa0"}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"\xe5\xa5\xbd"}}]}\n',
+            b'data: [DONE]\n'])
+
+        self.assertEqual(
+            '你好', ''.join(self.translator._parse_stream(response)))
+
+    @patch(module_name + '.base.request')
+    def test_translate_normal_ignores_reasoning_content(self, mock_request):
+        mock_request.return_value = json.dumps({
+            'choices': [{'message': {
+                'content': '你好世界！',
+                'reasoning_content': 'Let me think...</br>'}}]})
+        self.translator.stream = False
+
+        self.assertEqual(
+            '你好世界！', self.translator.translate('Hello World!'))
+
+    @patch(module_name + '.base.request')
+    def test_translate_normal_with_thinking(self, mock_request):
+        self.translator.thinking = True
+        self.translator.stream = False
+        mock_request.return_value = json.dumps({
+            'choices': [{'message': {
+                'content': '你好世界！',
+                'reasoning_content': 'Let me think...'}}]})
+
+        self.assertEqual(
+            '你好世界！', self.translator.translate('Hello World!'))
+        self.assertEqual(
+            {'type': 'enabled'},
+            json.loads(mock_request.call_args.kwargs['data'])['thinking'])
+
+    @patch(module_name + '.base.request')
+    def test_translate_normal_without_content(self, mock_request):
+        mock_request.return_value = json.dumps({
+            'choices': [{'message': {
+                'reasoning_content': 'Let me think...'}}]})
+        self.translator.stream = False
+
+        with self.assertRaises(UnexpectedResult):
+            self.translator.translate('Hello World!')
+
+    def test_extract_stream_content(self):
+        self.assertEqual(
+            'text',
+            self.translator._extract_stream_content(
+                {'choices': [{'delta': {'content': 'text'}}]}))
+        self.assertIsNone(self.translator._extract_stream_content(
+            {'choices': [{'delta': {'reasoning_content': 'thinking'}}]}))
+        self.assertIsNone(self.translator._extract_stream_content({}))
+        self.assertIsNone(self.translator._extract_stream_content(
+            {'choices': []}))
 
 
 class TestChatgptBatchTranslate(unittest.TestCase):

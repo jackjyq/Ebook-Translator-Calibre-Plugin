@@ -9,7 +9,8 @@ from calibre.utils.config import JSONConfig  # type: ignore
 
 from .. import EbookTranslator
 from ..engines import (
-    GoogleFreeTranslateNew, ChatgptTranslate, AzureChatgptTranslate)
+    GoogleFreeTranslateNew, ChatgptTranslate, AzureChatgptTranslate,
+    DeepseekTranslate)
 
 
 defaults: dict[str, Any] = {
@@ -117,6 +118,8 @@ def upgrade_config():
         ver205_upgrade(config)
     if version >= (2, 4, 0):  # type: ignore
         ver240_upgrade()
+    if version >= (2, 4, 3):  # type: ignore
+        ver243_upgrade(config)
 
 
 def ver200_upgrade(config):
@@ -219,3 +222,45 @@ def ver240_upgrade():
         os.rename(
             os.path.join(new_config_path, EbookTranslator.identifier + '.ini'),
             os.path.join(new_config_path, 'settings.ini'))
+
+
+def ver243_upgrade(config):
+    """Migrate the saved DeepSeek preference to the new model names."""
+    engine_config = config.get('engine_preferences') or {}
+    if not isinstance(engine_config, dict):
+        return
+    preference = engine_config.get('DeepSeek')
+    if not isinstance(preference, dict):
+        return
+
+    # Only the official endpoint is migrated, a custom one is preserved.
+    old_endpoint = 'https://api.deepseek.com/v1/chat/completions'
+    changed = False
+    endpoint = preference.get('endpoint')
+    if endpoint is not None:
+        endpoint = str(endpoint).rstrip('/')
+        if endpoint == old_endpoint:
+            preference.update(endpoint=DeepseekTranslate.endpoint)
+            changed = True
+        elif endpoint != DeepseekTranslate.endpoint:
+            return
+
+    # Map the retired model names to the new one. The thinking switch is
+    # only written when the user has not made an explicit choice.
+    migrations = {
+        'deepseek-chat': ('deepseek-flash', False),
+        'deepseek-reasoner': ('deepseek-flash', True),
+        'deepseek-v4-flash': ('deepseek-flash', None),
+    }
+    model = preference.get('model')
+    if model in migrations:
+        new_model, thinking = migrations[model]
+        preference.update(model=new_model)
+        if thinking is not None and 'thinking' not in preference:
+            preference.update(thinking=thinking)
+        changed = True
+
+    if not changed:
+        return
+    config.update(engine_preferences=engine_config)
+    config.commit()

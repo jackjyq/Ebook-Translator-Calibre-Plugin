@@ -17,7 +17,8 @@ from .lib.utils import (
     log, css, is_proxy_available, traceback_error, socks_proxy)
 from .lib.translation import get_engine_class, get_translator
 from .engines import (
-    builtin_engines, GeminiTranslate, ChatgptTranslate, AzureChatgptTranslate)
+    builtin_engines, GeminiTranslate, ChatgptTranslate, AzureChatgptTranslate,
+    DeepseekTranslate)
 from .engines.genai import GenAI
 from .engines.custom import CustomTranslate
 from .components import (
@@ -520,6 +521,22 @@ class TranslationSetting(QDialog):
 
         self.disable_wheel_event(genai_model_list)
 
+        # Thinking (DeepSeek only)
+        thinking_widget = QWidget()
+        thinking_layout = QHBoxLayout(thinking_widget)
+        thinking_layout.setContentsMargins(0, 0, 0, 0)
+        thinking_enabled = QCheckBox(_('Enable thinking'))
+        thinking_layout.addWidget(thinking_enabled)
+        thinking_layout.addStretch(1)
+        thinking_widget.setVisible(False)
+        genai_layout.addRow(thinking_widget)
+
+        def change_thinking(checked):
+            # Only DeepSeek supports the thinking switch.
+            if issubclass(self.current_engine, DeepseekTranslate):
+                self.current_engine.config.update(thinking=checked)
+        thinking_enabled.toggled.connect(change_thinking)
+
         sampling_widget = QWidget()
         sampling_layout = QHBoxLayout(sampling_widget)
         sampling_layout.setContentsMargins(0, 0, 0, 0)
@@ -676,6 +693,12 @@ class TranslationSetting(QDialog):
                 genai_model_input.setVisible(False)
             else:
                 auto_fetch_ai_models()
+            # Thinking
+            is_deepseek = issubclass(self.current_engine, DeepseekTranslate)
+            thinking_widget.setVisible(is_deepseek)
+            if is_deepseek:
+                thinking_enabled.setChecked(
+                    bool(config.get('thinking', self.current_engine.thinking)))
             # Sampling
             if not issubclass(self.current_engine, GeminiTranslate):
                 sampling = config.get('sampling', self.current_engine.sampling)
